@@ -101,6 +101,7 @@ jobs:
         run: pnpm run ui:test
 
   test-browser:
+    name: test-browser (${{ matrix.os }}, ${{ matrix.browser[0] }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
