@@ -7,6 +7,7 @@ on:
 jobs:
   close-issues:
     runs-on: ubuntu-latest
+    if: github.repository == 'vitest-dev/vitest'
     steps:
       - name: need reproduction
         uses: actions-cool/issues-helper@v3

@@ -1,0 +1,111 @@
+name: Setup
+description: Setup for node, pnpm and browser testing frameworks
+inputs:
+  node-version:
+    required: false
+    description: Node version for setup-node
+    default: 20.x
+  build:
+    required: false
+    description: Run the build command
+  browser-testing-frameworks:
+    required: false
+    description: Which browser testing frameworks to setup
+
+runs:
+  using: composite
+  steps:
+    - name: Set node version to ${{ inputs.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v2
+
+    - name: Get pnpm store directory
+      id: pnpm-cache-dir
+      shell: bash
+      run: echo "dir=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+    - name: Setup pnpm cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ steps.pnpm-cache-dir.outputs.dir }}
+        key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-store-
+
+    - name: Resolve package versions for browser testing frameworks
+      id: package-versions
+      uses: actions/github-script@v7
+      env:
+        PACKAGES: ${{ inputs.browser-testing-frameworks }}
+      with:
+        script: |
+          const packages = process.env.PACKAGES.split(',').map((p) => p.trim()).filter((p) => p);
+          if (!packages.includes('playwright')) packages.push('playwright-chromium');
+          const { readFile } = await import('node:fs/promises');
+          const lockfile = await readFile('pnpm-lock.yaml', 'utf8');
+          for (const package of packages) {
+            const pattern = new RegExp(`${package}:\\\s+specifier: [\\\s\\\w\\\.^]+version: (\\\d+\\\.\\\d+\\\.\\\d+)`);
+            const version = lockfile.match(pattern)?.[1];
+            if (!version) {
+              core.setFailed(`Couldn't get version for "${package}", received "${version}"`);
+              return;
+            } else {
+              core.setOutput(package, version);
+            }
+          }
+
+    - name: Set cache env vars
+      shell: bash
+      run: |
+        echo "CYPRESS_CACHE_FOLDER=${{ github.workspace }}/.cache/Cypress" >> "$GITHUB_ENV"
+        echo "PLAYWRIGHT_BROWSERS_PATH=${{ github.workspace }}/.cache/ms-playwright" >> "$GITHUB_ENV"
+
+    - name: Setup Playwright cache
+      if: steps.package-versions.outputs.playwright
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: ${{ runner.os }}-playwright-${{ steps.package-versions.outputs.playwright }}
+
+    - name: Setup Playwright Chromium cache
+      # playwright and playwright-chromium should have matching versions,
+      # so the playwright-chromium cache gets only enabled if the playwright cache isn't
+      if: steps.package-versions.outputs.playwright-chromium
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: ${{ runner.os }}-playwright-chromium-${{ steps.package-versions.outputs.playwright-chromium }}
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        CYPRESS_INSTALL_BINARY: '0'
+      run: pnpm install
+
+    - name: Setup Cypress cache
+      if: steps.package-versions.outputs.cypress
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.CYPRESS_CACHE_FOLDER }}
+        key: ${{ runner.os }}-cypress-${{ steps.package-versions.outputs.cypress }}
+
+    - name: Install Cypress
+      if: steps.package-versions.outputs.cypress
+      shell: bash
+      env:
+        npm_config_ignore_scripts: 'true'
+      run: pnpm dlx cypress@${{ steps.package-versions.outputs.cypress }} install
+
+    - name: Install Playwright dependencies
+      if: steps.package-versions.outputs.playwright
+      shell: bash
+      run: pnpm dlx playwright@${{ steps.package-versions.outputs.playwright }} install --with-deps
+
+    - name: Build
+      if: inputs.build == 'true'
+      shell: bash
+      run: pnpm run build
